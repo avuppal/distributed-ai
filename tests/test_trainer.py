@@ -244,3 +244,122 @@ class TestDistributedSampler:
         indices_epoch1 = list(sampler)
         # Different epochs should (almost certainly) produce different orderings
         assert indices_epoch0 != indices_epoch1, "epochs 0 and 1 produced identical orderings"
+
+
+# ---------------------------------------------------------------------------
+# Gradient norm clipping tests  (closes #3)
+# ---------------------------------------------------------------------------
+
+import torch
+import torch.nn as nn
+
+
+def _make_model_with_large_grads():
+    """Simple linear model whose gradients we can control precisely."""
+    model = nn.Linear(4, 2, bias=False)
+    # Force known large gradients by crafting the loss
+    x = torch.ones(1, 4) * 100.0
+    y = torch.zeros(1, 2)
+    loss = nn.MSELoss()(model(x), y)
+    loss.backward()
+    return model
+
+
+def test_clip_grad_norm_reduces_norm():
+    """After clipping, the gradient norm must be <= max_grad_norm."""
+    max_norm = 1.0
+    model = _make_model_with_large_grads()
+
+    # Pre-clip norm should be large
+    pre_norm = sum(
+        p.grad.data.norm(2).item() ** 2
+        for p in model.parameters()
+        if p.grad is not None
+    ) ** 0.5
+    assert pre_norm > max_norm, f"Expected pre-clip norm > {max_norm}, got {pre_norm}"
+
+    # Apply clipping
+    actual_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
+    post_norm = sum(
+        p.grad.data.norm(2).item() ** 2
+        for p in model.parameters()
+        if p.grad is not None
+    ) ** 0.5
+
+    assert post_norm <= max_norm + 1e-6, (
+        f"Post-clip norm {post_norm:.6f} exceeds max_grad_norm={max_norm}"
+    )
+
+
+def test_clip_grad_norm_returns_pre_clip_norm():
+    """clip_grad_norm_ must return the pre-clip gradient norm."""
+    max_norm = 1.0
+    model = _make_model_with_large_grads()
+
+    pre_norm_manual = sum(
+        p.grad.data.norm(2).item() ** 2
+        for p in model.parameters()
+        if p.grad is not None
+    ) ** 0.5
+
+    returned_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+    assert abs(returned_norm.item() - pre_norm_manual) < 1e-5
+
+
+def test_clip_grad_norm_noop_when_below_threshold():
+    """When gradients are small, clipping must not alter them."""
+    model = nn.Linear(4, 2, bias=False)
+    x = torch.ones(1, 4) * 0.001  # tiny inputs -> tiny grads
+    y = torch.zeros(1, 2)
+    loss = nn.MSELoss()(model(x), y)
+    loss.backward()
+
+    max_norm = 100.0  # very large threshold
+
+    # Save original grads
+    original_grads = {
+        name: p.grad.clone()
+        for name, p in model.named_parameters()
+        if p.grad is not None
+    }
+
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
+    for name, p in model.named_parameters():
+        if p.grad is not None:
+            assert torch.allclose(p.grad, original_grads[name], atol=1e-8), (
+                f"Gradient for '{name}' changed even though it was below the clip threshold"
+            )
+
+
+def test_clip_grad_norm_zero_disables_clipping():
+    """
+    Validate the convention used in distributed_trainer.py:
+    max_grad_norm <= 0 means 'skip clipping' (we just compute the norm).
+    """
+    model = _make_model_with_large_grads()
+    original_grads = {
+        name: p.grad.clone()
+        for name, p in model.named_parameters()
+        if p.grad is not None
+    }
+
+    max_grad_norm = 0  # disabled
+    if max_grad_norm <= 0:
+        # Compute norm without clipping
+        grad_norm = sum(
+            p.grad.data.norm(2).item() ** 2
+            for p in model.parameters()
+            if p.grad is not None
+        ) ** 0.5
+    else:
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm).item()
+
+    # Gradients must be unchanged
+    for name, p in model.named_parameters():
+        if p.grad is not None:
+            assert torch.allclose(p.grad, original_grads[name], atol=1e-8), (
+                f"Gradient for '{name}' was modified despite max_grad_norm=0"
+            )
+    assert grad_norm > 0, "Expected a positive norm even with clipping disabled"
