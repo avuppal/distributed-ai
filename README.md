@@ -4,6 +4,8 @@
 
 This repository simulates distributed training of AI models across multiple nodes (processes). It demonstrates key enterprise concepts: data parallelism, gradient synchronization, fault tolerance, and observability — all critical for training large models on clusters.
 
+📐 **[Architecture Deep Dive →](docs/architecture.md)** — Mermaid diagrams covering system topology, Ring-AllReduce, the fault-tolerance state machine, and the observability stack.
+
 ## Why This Project?
 - **Enterprise Relevance:** Real AI (e.g., LLMs) trains on 100s of GPUs. This shows the mechanics.
 - **Key Learning:** Understand networking bottlenecks (AllReduce over Ethernet) and why bandwidth matters more than raw compute at scale.
@@ -80,3 +82,10 @@ Tests skip automatically if PyTorch is not installed.
 - **Fault tolerance** — epoch-level checkpointing with resume support
 
 Contributions welcome! 🚀
+
+## Further Reading
+
+| Document | Contents |
+|----------|----------|
+| [docs/architecture.md](docs/architecture.md) | System diagrams, Ring-AllReduce breakdown, scaling guide |
+| [CHANGELOG.md](CHANGELOG.md) | Version history and upcoming features |
