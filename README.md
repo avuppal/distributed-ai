@@ -80,3 +80,6 @@ Tests skip automatically if PyTorch is not installed.
 - **Fault tolerance** — epoch-level checkpointing with resume support
 
 Contributions welcome! 🚀
+
+## Troubleshooting
+If you encounter NCCL errors, check the [Troubleshooting Guide](docs/troubleshooting.md).
