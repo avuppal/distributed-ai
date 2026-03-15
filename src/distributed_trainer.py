@@ -28,6 +28,8 @@ def main():
     parser.add_argument('--local-rank', type=int, default=int(os.environ.get('LOCAL_RANK', 0)), help='Local rank for GPU (if any)')
     parser.add_argument('--epochs', type=int, default=5, help='Number of training epochs')
     parser.add_argument('--resume', action='store_true', help='Resume from checkpoint')
+    parser.add_argument('--max-grad-norm', type=float, default=1.0,
+                        help='Maximum gradient norm for clipping (0 to disable, default: 1.0)')
     args = parser.parse_args()
 
     # Initialize distributed environment
@@ -95,6 +97,21 @@ def main():
             output = model(data)
             loss = nn.CrossEntropyLoss()(output, target)
             loss.backward()
+
+            # Gradient norm clipping — prevents exploding gradients in DDP.
+            # We compute and log the pre-clip norm for observability so
+            # operators can tune max_grad_norm without blind trial-and-error.
+            if args.max_grad_norm > 0:
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), args.max_grad_norm
+                ).item()
+            else:
+                grad_norm = sum(
+                    p.grad.data.norm(2).item() ** 2
+                    for p in model.parameters()
+                    if p.grad is not None
+                ) ** 0.5
+
             optimizer.step()
 
             total_loss += loss.item()
@@ -112,7 +129,7 @@ def main():
         throughput_gauge.labels(rank=args.rank).set(throughput)
 
         if args.rank == 0:
-            print(f"Epoch {epoch+1}: Loss {avg_loss:.4f}, Accuracy {accuracy:.2f}%, Throughput {throughput:.2f} samples/sec")
+            print(f"Epoch {epoch+1}: Loss {avg_loss:.4f}, Accuracy {accuracy:.2f}%, Throughput {throughput:.2f} samples/sec, Grad Norm {grad_norm:.4f}")
             # Fault Tolerance: Save Checkpoint
             save_checkpoint({
                 'epoch': epoch + 1,
